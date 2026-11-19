@@ -86,9 +86,14 @@ public final class Tracker {
 
 	private static String norm(String s) { return s.toLowerCase().replaceAll("[^a-z0-9]", ""); }
 
+	/** A newly seen gamemode shows up (with no quota) in every soup's list. */
+	private static void ensureMode(String m) {
+		for (Data.Profile p : d.profiles) if (p.hours.putIfAbsent(m, 0.0) == null) dirty = true;
+	}
+
 	private static void apply(String m) {
 		mode = (m == null || NONE.equals(m)) ? null : m;
-		if (mode != null) d.profile().hours.putIfAbsent(mode, 0.0);
+		if (mode != null) ensureMode(mode);
 		last = System.currentTimeMillis();
 	}
 
@@ -151,8 +156,7 @@ public final class Tracker {
 			joinqMode = parts[1];
 			joinqAt = now;
 			logUntil = now + 20_000;
-			Data.Profile p = d.profile();
-			if (!p.hours.containsKey(joinqMode)) { p.hours.put(joinqMode, 0.0); dirty = true; }
+			ensureMode(joinqMode);
 			log(">>> /" + command);
 		} else if (d.stopCommands.contains(parts[0])) {
 			mode = null;
@@ -268,6 +272,34 @@ public final class Tracker {
 	}
 
 	// ---------- quotas ----------
+
+	/**
+	 * Marks every quota that is ALREADY met as announced, silently. Called when you switch soup,
+	 * create/rename one or edit a quota, so only quotas reached while playing (or by adding
+	 * Discord messages) trigger a toast.
+	 */
+	public static void markMetAsAnnounced() {
+		Data.Profile p = d.profile();
+		boolean any = false, all = true;
+		for (Map.Entry<String, Double> e : p.hours.entrySet()) {
+			if (e.getValue() <= 0) continue;
+			any = true;
+			if (modeDone(p, e.getKey())) d.notified.add("m:" + p.name + ":" + e.getKey());
+			else all = false;
+		}
+		if (p.discord > 0) {
+			any = true;
+			if (d.discordCount >= p.discord) d.notified.add("d:" + p.name);
+			else all = false;
+		}
+		if (p.help > 0) {
+			any = true;
+			if (d.helpCount >= p.help) d.notified.add("h:" + p.name);
+			else all = false;
+		}
+		if (any && all) d.notified.add("all:" + p.name);
+		dirty = true;
+	}
 
 	public static void resetWeek() {
 		d.playMillis.clear();

@@ -55,11 +55,29 @@ public class QuotaScreen extends Screen {
 		tabBtn("Profile", 2, x0 + 154);
 		addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose())
 				.bounds(x1 - 56, y0 + 43, 50, 16).build());
+		if (Tracker.d.profiles.size() > 1) {
+			addRenderableWidget(Button.builder(Component.literal("<"), b -> switchSoup(-1))
+					.bounds(x0 + 230, y0 + 43, 16, 16).build());
+			addRenderableWidget(Button.builder(Component.literal(">"), b -> switchSoup(1))
+					.bounds(x0 + 248, y0 + 43, 16, 16).build());
+		}
 		switch (tab) {
 			case 0 -> overviewWidgets();
 			case 1 -> quotaWidgets();
 			default -> profileWidgets();
 		}
+	}
+
+	/** Changes which soup's quotas are shown and edited (works from every tab). */
+	private void switchSoup(int dir) {
+		flush();
+		Data d = Tracker.d;
+		d.active = (d.active + dir + d.profiles.size()) % d.profiles.size();
+		Tracker.markMetAsAnnounced();
+		modePage = 0;
+		confirmReset = false;
+		Tracker.dirty();
+		rebuildWidgets();
 	}
 
 	private void tabBtn(String name, int idx, int x) {
@@ -200,6 +218,7 @@ public class QuotaScreen extends Screen {
 		if (commits.isEmpty()) return;
 		for (Runnable r : new ArrayList<>(commits.values())) r.run();
 		commits.clear();
+		Tracker.markMetAsAnnounced();
 		Tracker.dirty();
 	}
 
@@ -222,6 +241,7 @@ public class QuotaScreen extends Screen {
 			small("x", x0 + 312, y, 14, () -> {
 				flush();
 				p.hours.remove(k);
+				Tracker.markMetAsAnnounced();
 				Tracker.dirty();
 				rebuildWidgets();
 			});
@@ -237,7 +257,7 @@ public class QuotaScreen extends Screen {
 			flush();
 			String k = addBox.getValue().trim().toLowerCase().replaceAll("\\s+", "");
 			if (!k.isEmpty()) {
-				p.hours.putIfAbsent(k, 0.0);
+				for (Data.Profile sp : Tracker.d.profiles) sp.hours.putIfAbsent(k, 0.0);
 				Tracker.dirty();
 				rebuildWidgets();
 			}
@@ -277,6 +297,7 @@ public class QuotaScreen extends Screen {
 				double nv = Math.max(0, get.getAsDouble() + dv);
 				if (hours) nv = Math.round(nv * 60) / 60.0;
 				set.accept(nv);
+				Tracker.markMetAsAnnounced();
 				Tracker.dirty();
 				syncing = true;
 				box.setValue(boxText(hours, get.getAsDouble()));
@@ -315,13 +336,13 @@ public class QuotaScreen extends Screen {
 		int cx = x0 + 80;
 
 		int y = py(0);
-		small("<", cx, y, 18, () -> { d.active = (d.active - 1 + d.profiles.size()) % d.profiles.size(); rebuildWidgets(); });
+		small("<", cx, y, 18, () -> { d.active = (d.active - 1 + d.profiles.size()) % d.profiles.size(); Tracker.markMetAsAnnounced(); rebuildWidgets(); });
 		EditBox nb = new EditBox(font, cx + 22, y, 110, 14, Component.empty());
 		nb.setMaxLength(24);
 		nb.setValue(p.name);
-		nb.setResponder(s -> { if (!s.isBlank()) { p.name = s; Tracker.dirty(); } });
+		nb.setResponder(s -> { if (!s.isBlank()) { p.name = s; Tracker.markMetAsAnnounced(); Tracker.dirty(); } });
 		addRenderableWidget(nb);
-		small(">", cx + 136, y, 18, () -> { d.active = (d.active + 1) % d.profiles.size(); rebuildWidgets(); });
+		small(">", cx + 136, y, 18, () -> { d.active = (d.active + 1) % d.profiles.size(); Tracker.markMetAsAnnounced(); rebuildWidgets(); });
 		small("New", cx + 160, y, 40, () -> {
 			Data.Profile np = new Data.Profile("Soup " + (d.profiles.size() + 1));
 			np.hours.clear();
@@ -330,6 +351,7 @@ public class QuotaScreen extends Screen {
 			np.help = p.help;
 			d.profiles.add(np);
 			d.active = d.profiles.size() - 1;
+			Tracker.markMetAsAnnounced();
 			Tracker.dirty();
 			rebuildWidgets();
 		});
@@ -337,6 +359,7 @@ public class QuotaScreen extends Screen {
 			if (d.profiles.size() > 1) {
 				d.profiles.remove(d.active);
 				d.active = Math.max(0, d.active - 1);
+				Tracker.markMetAsAnnounced();
 				Tracker.dirty();
 				rebuildWidgets();
 			}
@@ -454,7 +477,7 @@ public class QuotaScreen extends Screen {
 				Ui.w(font, "Week since " + new SimpleDateFormat("dd MMM HH:mm").format(new Date(d.weekStart)))) + 8;
 		int maxR = Math.max(30, endX - leftEnd);
 		Component rank2 = Component.literal(Ui.fit(font, d.rankName, maxR)).withStyle(fmt);
-		Component soup2 = Component.literal(Ui.fit(font, "Soup: " + p.name, maxR));
+		Component soup2 = Component.literal(Ui.fit(font, "Soup: " + p.name + (d.profiles.size() > 1 ? " (" + (d.active + 1) + "/" + d.profiles.size() + ")" : ""), maxR));
 		g.text(font, rank2, endX - font.width(rank2), y0 + 8, 0xFFFFFFFF);
 		g.text(font, soup2, endX - font.width(soup2), y0 + 21, 0xFFAAAAAA);
 		Images.draw(g, Images.get(d.rankImage), x1 - 30, y0 + 6, 24);
