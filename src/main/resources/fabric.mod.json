@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "bmcquota",
+  "version": "${version}",
+  "name": "BendersMC Quotas",
+  "description": "Track your BendersMC staff quotas: playtime per gamemode and Discord messages, per soup.",
+  "authors": ["BendersMC staff"],
+  "license": "MIT",
+  "icon": "assets/bmcquota/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.bendersmc.quota.BmcQuota"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": ">=26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
