@@ -9,14 +9,15 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
-import org.lwjgl.glfw.GLFW;
+
+import java.lang.reflect.Method;
 
 public class BmcQuota implements ClientModInitializer {
 	private static KeyMapping openKey;
@@ -26,7 +27,7 @@ public class BmcQuota implements ClientModInitializer {
 		Tracker.init();
 
 		openKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-				"key.bmcquota.open", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_K,
+				"key.bmcquota.open", InputConstants.KEY_K,
 				KeyMapping.Category.register(Identifier.fromNamespaceAndPath("bmcquota", "main"))));
 
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
@@ -45,9 +46,24 @@ public class BmcQuota implements ClientModInitializer {
 		// "BMC Quotas" button on the title screen and the pause menu (top-left).
 		ScreenEvents.AFTER_INIT.register((mc, screen, w, h) -> {
 			if (screen instanceof TitleScreen || screen instanceof PauseScreen) {
-				Screens.getButtons(screen).add(Button.builder(Component.literal("BMC Quotas"),
+				addWidget(screen, Button.builder(Component.literal("BMC Quotas"),
 						b -> mc.gui.setScreen(new QuotaScreen(screen))).bounds(6, 6, 80, 20).build());
 			}
 		});
+	}
+
+	/** Screen#addRenderableWidget is protected, so call it reflectively (compile-safe across versions). */
+	private static void addWidget(Screen screen, Object widget) {
+		try {
+			for (Method m : Screen.class.getDeclaredMethods()) {
+				if (m.getName().equals("addRenderableWidget") && m.getParameterCount() == 1) {
+					m.setAccessible(true);
+					m.invoke(screen, widget);
+					return;
+				}
+			}
+		} catch (Throwable t) {
+			System.err.println("[bmcquota] could not add button: " + t);
+		}
 	}
 }
