@@ -289,21 +289,26 @@ public final class Tracker {
 		for (Map.Entry<String, Double> e : p.hours.entrySet()) {
 			if (e.getValue() <= 0) continue;
 			any = true;
+			String key = "m:" + p.name + ":" + e.getKey();
 			if (modeDone(p, e.getKey())) {
-				fire("m:" + p.name + ":" + e.getKey(), Data.pretty(e.getKey()) + " quota complete!", "Playtime target reached");
-			} else all = false;
+				fire(key, Data.pretty(e.getKey()) + " quota complete!", "Playtime target reached");
+			} else {
+				d.notified.remove(key); // quota was raised: allow the toast again when it's met
+				all = false;
+			}
 		}
 		if (p.discord > 0) {
 			any = true;
 			if (d.discordCount >= p.discord) fire("d:" + p.name, "Discord quota complete!", d.discordCount + " messages sent");
-			else all = false;
+			else { d.notified.remove("d:" + p.name); all = false; }
 		}
 		if (p.help > 0) {
 			any = true;
 			if (d.helpCount >= p.help) fire("h:" + p.name, "Public help quota complete!", d.helpCount + " messages sent");
-			else all = false;
+			else { d.notified.remove("h:" + p.name); all = false; }
 		}
 		if (any && all) fire("all:" + p.name, "All quotas complete!", "Nice work, " + d.rankName);
+		else d.notified.remove("all:" + p.name);
 	}
 
 	private static void fire(String key, String title, String message) {
