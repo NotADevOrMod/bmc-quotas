@@ -16,22 +16,38 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-/** Playtime tracking, quota checks, saving. All calls happen on the client thread. */
+/** Playtime tracking, gamemode detection, quota checks, saving. All calls happen on the client thread. */
 public final class Tracker {
 	public static final Path DIR = FabricLoader.getInstance().getConfigDir().resolve("bmcquota");
+	public static final String NONE = "none";
 	private static final Path FILE = DIR.resolve("data.json");
 	private static final Path DISCORD_FILE = DIR.resolve("discord.json");
 	private static final Path DEBUG_LOG = DIR.resolve("debug.log");
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	private static final Pattern SENDING = Pattern.compile("(?i)sending you to\\s+(.+?)\\s+now");
 
 	public static Data d = new Data();
 	/** Gamemode currently being counted (null = not counting). */
 	public static String mode;
 	public static boolean online;
 
-	private static String pending;
-	private static long pendingAt, last, logUntil, discordModified;
+	// detection state
+	private static String pending;          // mode decided from the chat message, applied on the next JOIN
+	private static long pendingAt;
+	private static String joinqMode;        // what you typed after /joinq
+	private static long joinqAt;
+	private static int joins;               // JOINs on this connection (first one = initial login)
+	private static long logUntil;
+
+	// "which mode is this?" popup state
+	private static boolean askDue;
+	private static long askAt;
+	private static String askKey;           // normalised server name to remember the answer for (may be null)
+
+	private static long last, discordModified;
 	private static int ticks;
 	private static boolean dirty;
 
@@ -49,7 +65,8 @@ public final class Tracker {
 		} catch (Exception e) {
 			System.err.println("[bmcquota] could not load data: " + e);
 		}
-		d.profile(); // make sure at least one profile exists
+		if (d.serverModes == null) d.serverModes = new java.util.LinkedHashMap<>();
+		d.profile();
 		last = System.currentTimeMillis();
 	}
 
@@ -65,24 +82,63 @@ public final class Tracker {
 		}
 	}
 
-	// ---------- events ----------
+	// ---------- gamemode detection ----------
+
+	private static String norm(String s) { return s.toLowerCase().replaceAll("[^a-z0-9]", ""); }
+
+	private static void apply(String m) {
+		mode = (m == null || NONE.equals(m)) ? null : m;
+		if (mode != null) d.profile().hours.putIfAbsent(mode, 0.0);
+		last = System.currentTimeMillis();
+	}
+
+	/** Maps a server name to a known mode id, or NONE for lobbies; null if unknown. */
+	private static String matchMode(String key) {
+		if (key.contains("lobby") || key.contains("hub")) return NONE;
+		for (String k : d.profile().hours.keySet()) if (norm(k).equals(key)) return k;
+		for (String k : Data.DEFAULT_MODES) if (norm(k).equals(key)) return k;
+		return null;
+	}
 
 	public static void onJoin(Minecraft mc) {
 		var server = mc.getCurrentServer();
 		String ip = server == null ? "" : String.valueOf(server.ip).toLowerCase();
 		online = ip.contains(d.serverMatch.toLowerCase());
 		long now = System.currentTimeMillis();
-		if (online && pending != null && now - pendingAt < 120_000) {
-			mode = pending;
-			pending = null;
-		}
 		last = now;
+		logUntil = now + 20_000;
+		log("JOIN server=" + ip);
+		if (!online) return;
+		joins++;
+
+		if (pending == null && joinqMode != null && now - joinqAt < 120_000) {
+			pending = joinqMode;
+			pendingAt = now;
+		}
+		if (pending != null && now - pendingAt < 120_000) {
+			apply(pending);
+			pending = null;
+			joinqMode = null;
+			askDue = false;
+			askKey = null;
+			return;
+		}
+		pending = null;
+		mode = null;
+		if (askKey != null) return;   // we already know there is a named server to ask about
+		if (joins > 1) {              // switched servers but nothing told us where: ask
+			askDue = true;
+			askAt = now + 4000;
+		}
 	}
 
 	public static void onDisconnect() {
 		online = false;
 		mode = null;
 		pending = null;
+		joinqMode = null;
+		joins = 0;
+		dismissAsk();
 		save();
 	}
 
@@ -90,21 +146,75 @@ public final class Tracker {
 	public static void onCommand(String command) {
 		String[] parts = command.trim().toLowerCase().split("\\s+");
 		if (parts.length == 0) return;
+		long now = System.currentTimeMillis();
 		if (parts[0].equals("joinq") && parts.length >= 2) {
-			pending = parts[1];
-			pendingAt = System.currentTimeMillis();
-			logUntil = pendingAt + 20_000; // log what the server prints so we can refine detection
+			joinqMode = parts[1];
+			joinqAt = now;
+			logUntil = now + 20_000;
 			Data.Profile p = d.profile();
-			if (!p.hours.containsKey(pending)) { p.hours.put(pending, 0.0); dirty = true; }
+			if (!p.hours.containsKey(joinqMode)) { p.hours.put(joinqMode, 0.0); dirty = true; }
 			log(">>> /" + command);
 		} else if (d.stopCommands.contains(parts[0])) {
 			mode = null;
 			pending = null;
+			joinqMode = null;
 		}
 	}
 
 	public static void onGameMessage(Component message) {
-		if (System.currentTimeMillis() < logUntil) log(message.getString());
+		String text = message.getString();
+		long now = System.currentTimeMillis();
+		Matcher m = SENDING.matcher(text);
+		boolean matched = m.find();
+		if (matched || now < logUntil) log(text);
+		if (!matched) return;
+
+		String name = m.group(1).replaceAll("[\\[\\]]", "").trim();
+		String key = norm(name);
+		if (key.isEmpty()) return;
+		logUntil = now + 20_000;
+
+		String target = d.serverModes.get(key);
+		if (target == null) target = matchMode(key);
+		if (target == null && joinqMode != null && now - joinqAt < 300_000) {
+			target = joinqMode;               // learn: this server is what /joinq took us to
+			d.serverModes.put(key, target);
+			dirty = true;
+			log("learned " + key + " -> " + target);
+		}
+		joinqMode = null;
+		if (target != null) {
+			pending = target;
+			pendingAt = now;
+			askDue = false;
+			askKey = null;
+		} else {
+			pending = null;
+			askKey = key;
+			askNameValue = name;
+			askDue = true;
+			askAt = now + 4000;
+		}
+	}
+
+	private static String askNameValue;
+
+	// ---------- "which mode is this?" popup ----------
+
+	/** Called by the popup when you pick a mode (or "none"). */
+	public static void answer(String choice) {
+		apply(choice);
+		if (askKey != null) d.serverModes.put(askKey, choice);
+		askDue = false;
+		askKey = null;
+		askNameValue = null;
+		dirty = true;
+	}
+
+	public static void dismissAsk() {
+		askDue = false;
+		askKey = null;
+		askNameValue = null;
 	}
 
 	private static void log(String line) {
@@ -125,6 +235,14 @@ public final class Tracker {
 		}
 		last = now;
 		ticks++;
+		if (askDue && online && now >= askAt) {
+			if (mc.gui.screen() == null) {
+				askDue = false;
+				mc.gui.setScreen(new AskModeScreen(askNameValue));
+			} else if (now > askAt + 60_000) {
+				dismissAsk();
+			}
+		}
 		if (ticks % 20 == 0) check();
 		if (ticks % 100 == 0) pollDiscordFile();
 		if (ticks % 600 == 0 && dirty) save();

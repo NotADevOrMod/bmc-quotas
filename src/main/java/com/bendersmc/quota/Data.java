@@ -18,6 +18,9 @@ public final class Data {
 	/** Commands (without the slash) that mean "I left my gamemode". */
 	public List<String> stopCommands = new ArrayList<>(List.of("lobby", "hub", "l"));
 
+	/** server name from "Sending you to X now..." (letters/digits only, lowercase) -> mode id, or "none". Self-filling. */
+	public Map<String, String> serverModes = new LinkedHashMap<>();
+
 	public Map<String, Long> playMillis = new LinkedHashMap<>();
 	public int discordCount = 0;
 	public int helpCount = 0;
