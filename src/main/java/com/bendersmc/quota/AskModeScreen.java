@@ -39,7 +39,7 @@ public class AskModeScreen extends Screen {
 		for (int i = 0; i < total; i++) {
 			boolean none = i == keys.size();
 			String k = none ? Tracker.NONE : keys.get(i);
-			String label = none ? "Not counting" : Data.pretty(k);
+			String label = Ui.fit(font, none ? "Not counting" : Data.pretty(k), 128);
 			addRenderableWidget(Button.builder(Component.literal(label), b -> {
 				Tracker.answer(k);
 				Minecraft.getInstance().gui.setScreen(null);
@@ -65,9 +65,9 @@ public class AskModeScreen extends Screen {
 		}
 		int lh = 22, lw = lh * LOGO_W / LOGO_H;
 		g.blit(RenderPipelines.GUI_TEXTURED, LOGO, x0 + 8, y0 + 8, 0f, 0f, lw, lh, LOGO_W, LOGO_H, LOGO_W, LOGO_H);
-		g.text(font, Component.literal("Which mode is this?"), x0 + 38, y0 + 9, 0xFFFFFFFF);
-		String sub = serverName != null ? "Server: " + serverName + " (I'll remember your answer)"
-				: "I couldn't tell where you just went";
+		g.text(font, Component.literal(Ui.fit(font, "Which mode is this?", PW - 46)), x0 + 38, y0 + 9, 0xFFFFFFFF);
+		String sub = serverName != null ? "Server: " + serverName : "I couldn't tell where you just went";
+		sub = Ui.fit(font, sub, PW - 46);
 		g.text(font, Component.literal(sub), x0 + 38, y0 + 22, 0xFF999999);
 	}
 }

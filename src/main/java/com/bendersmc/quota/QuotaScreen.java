@@ -15,7 +15,10 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.DoubleConsumer;
+import java.util.function.DoubleSupplier;
 
 public class QuotaScreen extends Screen {
 	private static final Identifier LOGO = Identifier.fromNamespaceAndPath("bmcquota", "textures/gui/logo.png");
@@ -43,6 +46,7 @@ public class QuotaScreen extends Screen {
 
 	@Override
 	protected void init() {
+		flush();
 		x0 = (width - PW) / 2;
 		y0 = Math.max(2, (height - PH) / 2);
 		int x1 = x0 + PW;
@@ -60,6 +64,7 @@ public class QuotaScreen extends Screen {
 
 	private void tabBtn(String name, int idx, int x) {
 		Button b = Button.builder(Component.literal(name), btn -> {
+			flush();
 			tab = idx;
 			confirmReset = false;
 			dropTarget = null;
@@ -77,6 +82,7 @@ public class QuotaScreen extends Screen {
 
 	@Override
 	public void onClose() {
+		flush();
 		Tracker.save();
 		Minecraft.getInstance().gui.setScreen(parent);
 	}
@@ -115,7 +121,7 @@ public class QuotaScreen extends Screen {
 
 		int fy = y0 + PH - 24;
 		String cur = Tracker.mode == null ? "nothing" : Data.pretty(Tracker.mode);
-		addRenderableWidget(Button.builder(Component.literal("Tracking: " + cur), b -> {
+		addRenderableWidget(Button.builder(Component.literal(Ui.fit(font, "Tracking: " + cur, 128)), b -> {
 			List<String> opts = new ArrayList<>();
 			opts.add(null);
 			opts.addAll(Tracker.d.profile().hours.keySet());
@@ -123,7 +129,7 @@ public class QuotaScreen extends Screen {
 			Tracker.mode = opts.get((i + 1) % opts.size());
 			rebuildWidgets();
 		}).bounds(x0 + 6, fy, 140, 16).build());
-		addRenderableWidget(Button.builder(Component.literal(confirmReset ? "Click again to reset" : "Reset week"), b -> {
+		addRenderableWidget(Button.builder(Component.literal(confirmReset ? "Click to confirm" : "Reset week"), b -> {
 			if (confirmReset) {
 				Tracker.resetWeek();
 				confirmReset = false;
@@ -144,11 +150,11 @@ public class QuotaScreen extends Screen {
 			double quota = p.hours.getOrDefault(k, 0.0);
 			long played = d.playMillis.getOrDefault(k, 0L);
 			int ry = by + i * rh;
-			text(g, Data.pretty(k), x0 + 10, ry + 3, 0xFFFFFFFF);
+			textFit(g, Data.pretty(k), x0 + 10, ry + 3, 90, 0xFFFFFFFF);
 			if (quota > 0) {
 				bar(g, x0 + 104, ry + 2, 80, 10, played / (quota * 3_600_000d));
 				boolean done = Tracker.modeDone(p, k);
-				text(g, done ? "DONE  " + hm(played) : hm(played) + " / " + hrs(quota), x0 + 190, ry + 3,
+				textFit(g, done ? "DONE  " + hm(played) : hm(played) + " / " + hrs(quota), x0 + 190, ry + 3, 134,
 						done ? 0xFF55FF55 : 0xFFCCCCCC);
 			} else {
 				text(g, hm(played) + "  (no quota)", x0 + 104, ry + 3, 0xFF888888);
@@ -163,11 +169,11 @@ public class QuotaScreen extends Screen {
 	}
 
 	private void counterRow(GuiGraphicsExtractor g, String label, int count, int quota, int ry) {
-		text(g, label, x0 + 10, ry + 3, 0xFFFFFFFF);
+		textFit(g, label, x0 + 10, ry + 3, 90, 0xFFFFFFFF);
 		if (quota > 0) {
 			bar(g, x0 + 104, ry + 2, 80, 10, (double) count / quota);
 			boolean done = count >= quota;
-			text(g, count + "/" + quota, x0 + 190, ry + 3, done ? 0xFF55FF55 : 0xFFCCCCCC);
+			textFit(g, count + "/" + quota, x0 + 190, ry + 3, 58, done ? 0xFF55FF55 : 0xFFCCCCCC);
 		} else {
 			text(g, count + "  (no quota)", x0 + 104, ry + 3, 0xFF888888);
 		}
@@ -185,32 +191,50 @@ public class QuotaScreen extends Screen {
 
 	private int qy(int i) { return y0 + 66 + i * 17; }
 
+	/** Typed values are applied when you change tab, press +/-, or close the menu (not mid-typing). */
+	private final Map<String, Runnable> commits = new LinkedHashMap<>();
+	private String preview = "";
+	private boolean previewBad, syncing;
+
+	private void flush() {
+		if (commits.isEmpty()) return;
+		for (Runnable r : new ArrayList<>(commits.values())) r.run();
+		commits.clear();
+		Tracker.dirty();
+	}
+
 	private void quotaWidgets() {
 		Data.Profile p = Tracker.d.profile();
 		List<String> keys = new ArrayList<>(p.hours.keySet());
 		int pages = Math.max(1, (keys.size() + 3) / 4);
 		modePage = Math.max(0, Math.min(modePage, pages - 1));
+		double[] hd = {-1, -1 / 6.0, 1 / 6.0, 1};
+		String[] hl = {"-1h", "-10m", "+10m", "+1h"};
+		double[] cd = {-50, -10, 10, 50};
+		String[] cl = {"-50", "-10", "+10", "+50"};
+		preview = "";
 		for (int i = 0; i < 4; i++) {
 			int idx = modePage * 4 + i;
 			if (idx >= keys.size()) break;
 			String k = keys.get(idx);
 			int y = qy(i);
-			deltaButtons(y, new double[]{-5, -0.5, 0.5, 5}, dv ->
-					p.hours.put(k, Math.max(0, Math.round((p.hours.get(k) + dv) * 2) / 2.0)));
+			valueRow(y, "m:" + k, true, () -> p.hours.getOrDefault(k, 0.0), v -> p.hours.put(k, v), hd, hl);
 			small("x", x0 + 312, y, 14, () -> {
+				flush();
 				p.hours.remove(k);
 				Tracker.dirty();
 				rebuildWidgets();
 			});
 		}
-		deltaButtons(qy(4), new double[]{-50, -10, 10, 50}, dv -> p.discord = (int) Math.max(0, p.discord + dv));
-		deltaButtons(qy(5), new double[]{-50, -10, 10, 50}, dv -> p.help = (int) Math.max(0, p.help + dv));
+		valueRow(qy(4), "d", false, () -> p.discord, v -> p.discord = (int) v, cd, cl);
+		valueRow(qy(5), "h", false, () -> p.help, v -> p.help = (int) v, cd, cl);
 
 		addBox = new EditBox(font, x0 + 10, qy(6), 130, 14, Component.empty());
 		addBox.setMaxLength(24);
 		addBox.setHint(Component.literal("new gamemode id..."));
 		addRenderableWidget(addBox);
 		small("Add", x0 + 144, qy(6), 36, () -> {
+			flush();
 			String k = addBox.getValue().trim().toLowerCase().replaceAll("\\s+", "");
 			if (!k.isEmpty()) {
 				p.hours.putIfAbsent(k, 0.0);
@@ -218,17 +242,46 @@ public class QuotaScreen extends Screen {
 				rebuildWidgets();
 			}
 		});
-		small("<", x0 + 188, qy(6), 18, () -> { modePage = Math.max(0, modePage - 1); rebuildWidgets(); });
-		small(">", x0 + 208, qy(6), 18, () -> { modePage++; rebuildWidgets(); });
+		small("<", x0 + 188, qy(6), 18, () -> { flush(); modePage = Math.max(0, modePage - 1); rebuildWidgets(); });
+		small(">", x0 + 208, qy(6), 18, () -> { flush(); modePage++; rebuildWidgets(); });
 	}
 
-	private void deltaButtons(int y, double[] deltas, DoubleConsumer onDelta) {
+	private static String boxText(boolean hours, double v) {
+		return hours ? Fmt.edit(v) : String.valueOf((long) v);
+	}
+
+	/** One editable value: a text box plus 4 quick-adjust buttons. */
+	private void valueRow(int y, String id, boolean hours, DoubleSupplier get, DoubleConsumer set,
+						  double[] deltas, String[] labels) {
+		EditBox box = new EditBox(font, x0 + 104, y, 80, 14, Component.empty());
+		box.setMaxLength(12);
+		box.setValue(boxText(hours, get.getAsDouble()));
+		box.setResponder(s -> {
+			if (syncing) return;
+			Double v = hours ? Fmt.parseHours(s) : Fmt.parseCount(s);
+			if (v == null) {
+				preview = "Invalid value";
+				previewBad = true;
+				commits.remove(id);
+				return;
+			}
+			preview = "= " + (hours ? Fmt.pretty(v) : String.valueOf(v.longValue()));
+			previewBad = false;
+			commits.put(id, () -> set.accept(v));
+		});
+		addRenderableWidget(box);
 		for (int i = 0; i < deltas.length; i++) {
 			double dv = deltas[i];
-			String label = (dv > 0 ? "+" : "") + (dv == Math.floor(dv) ? String.valueOf((long) dv) : String.valueOf(dv));
-			small(label, x0 + 190 + i * 30, y, 28, () -> {
-				onDelta.accept(dv);
+			small(labels[i], x0 + 190 + i * 30, y, 28, () -> {
+				flush();
+				double nv = Math.max(0, get.getAsDouble() + dv);
+				if (hours) nv = Math.round(nv * 60) / 60.0;
+				set.accept(nv);
 				Tracker.dirty();
+				syncing = true;
+				box.setValue(boxText(hours, get.getAsDouble()));
+				syncing = false;
+				preview = "";
 			});
 		}
 	}
@@ -240,17 +293,16 @@ public class QuotaScreen extends Screen {
 		for (int i = 0; i < 4; i++) {
 			int idx = modePage * 4 + i;
 			if (idx >= keys.size()) break;
-			String k = keys.get(idx);
-			double h = p.hours.get(k);
-			text(g, Data.pretty(k), x0 + 10, qy(i) + 3, 0xFFFFFFFF);
-			text(g, h > 0 ? "Quota: " + hrs(h) : "No quota", x0 + 104, qy(i) + 3, h > 0 ? 0xFFFFFF55 : 0xFF888888);
+			textFit(g, Data.pretty(keys.get(idx)), x0 + 10, qy(i) + 3, 90, 0xFFFFFFFF);
 		}
 		text(g, "Discord msgs", x0 + 10, qy(4) + 3, 0xFFFFFFFF);
-		text(g, p.discord > 0 ? "Quota: " + p.discord : "No quota", x0 + 104, qy(4) + 3, p.discord > 0 ? 0xFFFFFF55 : 0xFF888888);
 		text(g, "Public help", x0 + 10, qy(5) + 3, 0xFFFFFFFF);
-		text(g, p.help > 0 ? "Quota: " + p.help : "Optional", x0 + 104, qy(5) + 3, p.help > 0 ? 0xFFFFFF55 : 0xFF888888);
 		text(g, "Page " + (modePage + 1) + "/" + pages, x0 + 232, qy(6) + 3, 0xFFAAAAAA);
-		text(g, "Editing quotas for: " + p.name, x0 + 10, y0 + PH - 12, 0xFF888888);
+		int pw = preview.isEmpty() ? 0 : Ui.w(font, preview) + 8;
+		textFit(g, "Hours: 1.30 = 1h 30m   0 = no quota", x0 + 10, y0 + PH - 13, PW - 20 - pw, 0xFF888888);
+		if (!preview.isEmpty()) {
+			text(g, preview, x0 + PW - 8 - (pw - 8), y0 + PH - 13, previewBad ? 0xFFFF5555 : 0xFF55FF55);
+		}
 	}
 
 	// ======================= profile tab =======================
@@ -315,18 +367,21 @@ public class QuotaScreen extends Screen {
 	private void drawProfile(GuiGraphicsExtractor g) {
 		Data d = Tracker.d;
 		Data.Profile p = d.profile();
-		text(g, "Soup", x0 + 10, py(0) + 3, 0xFFFFFFFF);
+		text(g, "Soup " + (d.active + 1) + "/" + d.profiles.size(), x0 + 10, py(0) + 3, 0xFFFFFFFF);
 		text(g, "Soup mark", x0 + 10, py(1) + 3, 0xFFFFFFFF);
 		text(g, "Rank name", x0 + 10, py(2) + 3, 0xFFFFFFFF);
 		text(g, "Rank colour", x0 + 10, py(3) + 3, 0xFFFFFFFF);
 		text(g, "Rank image", x0 + 10, py(4) + 3, 0xFFFFFFFF);
-		text(g, (d.active + 1) + "/" + d.profiles.size(), x0 + 80 + 246, py(0) + 3, 0xFF888888);
 		preview(g, Images.get(p.mark), x0 + 80 + 114, py(1) - 1);
 		preview(g, Images.get(d.rankImage), x0 + 80 + 114, py(4) - 1);
 		String hint = dropTarget != null
 				? "Couldn't open a file picker: drag an image file onto this window now."
 				: "Browse opens a file picker. You can also drag an image onto the window.";
-		text(g, hint, x0 + 10, py(5) + 6, dropTarget != null ? 0xFFFFFF55 : 0xFF888888);
+		int hy = py(5) + 4;
+		for (String line : Ui.wrap(font, hint, PW - 20)) {
+			text(g, line, x0 + 10, hy, dropTarget != null ? 0xFFFFFF55 : 0xFF888888);
+			hy += 10;
+		}
 	}
 
 	private void preview(GuiGraphicsExtractor g, Images.Tex t, int x, int y) {
@@ -395,8 +450,13 @@ public class QuotaScreen extends Screen {
 		Component rank = Component.literal(d.rankName).withStyle(fmt);
 		Component soup = Component.literal("Soup: " + p.name);
 		int endX = x1 - 62;
-		g.text(font, rank, endX - font.width(rank), y0 + 8, 0xFFFFFFFF);
-		g.text(font, soup, endX - font.width(soup), y0 + 21, 0xFFAAAAAA);
+		int leftEnd = x0 + 42 + Math.max(Ui.w(font, "BendersMC Quotas"),
+				Ui.w(font, "Week since " + new SimpleDateFormat("dd MMM HH:mm").format(new Date(d.weekStart)))) + 8;
+		int maxR = Math.max(30, endX - leftEnd);
+		Component rank2 = Component.literal(Ui.fit(font, d.rankName, maxR)).withStyle(fmt);
+		Component soup2 = Component.literal(Ui.fit(font, "Soup: " + p.name, maxR));
+		g.text(font, rank2, endX - font.width(rank2), y0 + 8, 0xFFFFFFFF);
+		g.text(font, soup2, endX - font.width(soup2), y0 + 21, 0xFFAAAAAA);
 		Images.draw(g, Images.get(d.rankImage), x1 - 30, y0 + 6, 24);
 		Images.draw(g, Images.get(p.mark), x1 - 58, y0 + 6, 24);
 
@@ -416,12 +476,21 @@ public class QuotaScreen extends Screen {
 		g.text(font, Component.literal(s), x, y, color);
 	}
 
+	/** Same as text() but cut with ".." if it would be wider than maxW. */
+	private void textFit(GuiGraphicsExtractor g, String s, int x, int y, int maxW, int color) {
+		text(g, Ui.fit(font, s, maxW), x, y, color);
+	}
+
 	private static String hm(long ms) {
 		long m = ms / 60_000;
 		return (m / 60) + "h " + (m % 60) + "m";
 	}
 
 	private static String hrs(double h) {
-		return h == Math.floor(h) ? (long) h + "h" : h + "h";
+		return Fmt.pretty(h);
+	}
+
+	public void removed() {
+		flush();
 	}
 }
