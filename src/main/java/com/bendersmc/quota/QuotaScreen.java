@@ -35,6 +35,7 @@ public class QuotaScreen extends Screen {
 	private int tab = 0, modePage = 0, x0, y0;
 	private boolean confirmReset;
 	private String dropTarget;
+	private volatile boolean picking;
 	private EditBox addBox;
 
 	public QuotaScreen(Screen parent) {
@@ -397,12 +398,14 @@ public class QuotaScreen extends Screen {
 		text(g, "Rank image", x0 + 10, py(4) + 3, 0xFFFFFFFF);
 		preview(g, Images.get(p.mark), x0 + 80 + 114, py(1) - 1);
 		preview(g, Images.get(d.rankImage), x0 + 80 + 114, py(4) - 1);
-		String hint = dropTarget != null
+		String hint = picking
+				? "File picker is open: choose an image (check your taskbar if you can't see it)."
+				: dropTarget != null
 				? "Couldn't open a file picker: drag an image file onto this window now."
 				: "Browse opens a file picker. You can also drag an image onto the window.";
 		int hy = py(5) + 4;
 		for (String line : Ui.wrap(font, hint, PW - 20)) {
-			text(g, line, x0 + 10, hy, dropTarget != null ? 0xFFFFFF55 : 0xFF888888);
+			text(g, line, x0 + 10, hy, (picking || dropTarget != null) ? 0xFFFFFF55 : 0xFF888888);
 			hy += 10;
 		}
 	}
@@ -431,9 +434,14 @@ public class QuotaScreen extends Screen {
 	}
 
 	private void browse(String target) {
-		String f = FileDialog.pickImage();
-		if (f == null) { dropTarget = target; return; }
-		applyImage(target, Path.of(f));
+		if (picking) return;
+		picking = true;
+		dropTarget = null;
+		FileDialog.pickImageAsync((path, unavailable) -> Minecraft.getInstance().execute(() -> {
+			picking = false;
+			if (path != null) applyImage(target, Path.of(path));
+			else if (unavailable) dropTarget = target; // no picker on this system: use drag-and-drop
+		}));
 	}
 
 	private void applyImage(String target, Path src) {
@@ -443,7 +451,7 @@ public class QuotaScreen extends Screen {
 		else Tracker.d.rankImage = stored;
 		dropTarget = null;
 		Tracker.dirty();
-		rebuildWidgets();
+		if (Minecraft.getInstance().gui.screen() == this) rebuildWidgets();
 	}
 
 	/** Drag-and-drop fallback for the image pickers. */
